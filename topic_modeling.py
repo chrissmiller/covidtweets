@@ -11,12 +11,15 @@ import spacy
 from spacy import displacy
 
 import nltk
+from nltk import pos_tag
+from nltk.stem import WordNetLemmatizer
 from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
 from nltk.corpus import webtext
-from nltk.collocations import BigramCollocationFinder
-from nltk.metrics import BigramAssocMeasures
 from nltk.corpus import stopwords
+from nltk.corpus.reader.wordnet import ADJ, ADV, NOUN, VERB
+from nltk.metrics import BigramAssocMeasures, TrigramAssocMeasures
+from nltk.tokenize import word_tokenize
+from nltk.collocations import BigramCollocationFinder, TrigramCollocationFinder
 
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.decomposition import LatentDirichletAllocation as LDA
@@ -27,25 +30,33 @@ from gensim import corpora, models
 
 nltk.download('punkt')
 nltk.download('stopwords')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('wordnet')
+nltk.download('universal_tagset')
 
 '''
 https://towardsdatascience.com/topic-modeling-of-2019-hr-tech-conference-twitter-d16cf75895b6
 Data import
 '''
 
-np.random.seed(0)
+np.random.seed(1)
 
 datafiles = ['data/2020-' + date for date in ['03-29', '03-30', '03-31', '04-01', '04-02', '04-03', '04-04', '04-05', '04-06', '04-07', '04-08', '04-09', '04-10', '04-11', '04-12', '04-13', '04-14', '04-15', '04-16']]
 
-per_file = 10000
+per_file = 100000
 covid_data = pd.read_csv(datafiles[0]).sample(n=per_file)
 for file in datafiles[1:]:
     next_file = pd.read_csv(file)
     next_file = next_file.sample(n=per_file)
     covid_data = covid_data.append(next_file)
 
+print(f"Evaluating {len(covid_data)} tweets.")
+
 # We limit to english tweets to ensure topics are applicable to all tweets
 covid_data_en = covid_data[covid_data.lang == 'en']
+print(f"Found {len(covid_data_en)} English tweets.")
+
+
 covid_data_en.created_at = pd.to_datetime(covid_data_en.created_at)
 covid_data_en["dayofyear"] = covid_data_en.created_at.map(lambda x: x.dayofyear)
 
@@ -65,6 +76,7 @@ In english the word breakdown of text is:
 *   120k telephone conversations
 '''
 nlp = spacy.load('en_core_web_sm')
+stopwords_set = set(stopwords.words('english'))
 
 
 def getNE(tweets, maxnum = 4000):
@@ -76,69 +88,94 @@ def getNE(tweets, maxnum = 4000):
     returns: dictionary mapping named entities to their counts
     '''
     items = collections.defaultdict(int)
-    text = ''
+    text = []
     k = 0
     for i,tweet in enumerate(tweets):
         if k == maxnum or i == len(tweets) - 1:
+            text = ' '.join(text)
             doc = nlp(text)
             for ent in doc.ents:
-                if ent.label not in [391,396,397]: # labels for non-named entities
+                if ent.label not in [391,396,397,384]: # labels for non-named entities (remove places too)
                     items[ent.text] += 1
             k = 0
-            text = ''
+            text = []
         else:
             k = k + 1
-            string = clean(tweet)
-            text = text + ' ' + string
+            text.append(tweet)
     return items
 
-def clean(tweet):
-    '''
-        Lowercases tweet and filters out non alphanumeric tokens, common tokens, and short tokens
+def preprocess(strings):
+    clean_text = []
+    for text in strings:
+        tokens = word_tokenize(text)
+        tokens = map(lambda s: s.lower(), tokens)
+        tokens = filter(lambda tok: tok.isalnum() and (tok not in stopwords_set) and (tok != 'https') and ('//t' not in tok) and ('covid' not in tok) and ('corona' not in tok) and (len(tok) > 2), tokens)
+        clean_text.append(list(tokens))
+    return clean_text
 
-        returns: filtered string
-    '''
-    tokens = word_tokenize(tweet)
+def preprocessString(strings):
+    word_string = ' '.join(strings)
+    tokens = word_tokenize(word_string)
     tokens = map(lambda s: s.lower(), tokens)
-    tokens = filter(lambda tok: tok.isalnum() and ('covid' not in tok) and ('corona' not in tok) and (len(tok) > 2), tokens)
-    string = ' '.join(tokens)
-    return string
+    tokens = filter(lambda tok: tok.isalnum() and (tok not in stopwords_set) and (tok != 'https') and ('//t' not in tok) and ('covid' not in tok) and ('corona' not in tok) and (len(tok) > 3), tokens)
+    clean_text = list(tokens)
+    return clean_text
 
-def groupTweets(ents, tweets):
+def lemmatize(strings):
+    lemmatizer = WordNetLemmatizer()
+    tagmap = {'NOUN':NOUN, 'VERB':VERB, 'ADJ':ADJ, 'ADV':ADV}
+    tweetset_cleaned = []
+    for tweet in strings:
+        tokens = word_tokenize(tweet)
+        tokens = map(lambda s: s.lower(), tokens)
+        tokens = filter(lambda tok: tok.isalnum() and (tok not in stopwords_set) and (tok != 'https') and ('//t' not in tok) and ('covid' not in tok) and ('corona' not in tok) and (len(tok) > 3), tokens)
+        text = list(tokens)
+        tagged = pos_tag(text, tagset='universal')
+        cleaned_tweet = []
+        for i, (word,tag) in enumerate(tagged):
+            cleaned_tweet.append(lemmatizer.lemmatize(word, pos=tagmap.get(tag,NOUN)))
+        tweetset_cleaned.append(cleaned_tweet)
+    return tweetset_cleaned
+
+def buildDocuments(ents, tweets):
     '''
     args:
         ents: list of tuples (entity, entitycount)
         tweets: list of strings
     returns:
-        list of entity indices for the tweets
+        list of documents
     '''
-    labels = []
-    for tweet in tweets:
-        labels.append(-1)
-        for index,ent in enumerate(ents):
-            if (str(ent).lower() in tweet.lower()):
-                labels[-1] = index
-                break # coudl alos label all here
-    return labels
+    documents = []
+    for i,ent in enumerate(ents):
+        documents.append([])
+        for j,tweet in enumerate(tweets):
+            if ent in tweet.lower():
+                documents[i].append(tweet)
+    return documents
 
-def get_top_NEs(data, num=100, verbose=True):
+
+def get_top_NEs(tweets, num=100, verbose=True):
     '''
     Gets the top {num} named entities from {data}. Requires data.text to exist.
     '''
-    NES = getNE(data['text'])
+    NES = getNE(tweets)
     most = Counter(NES).most_common(num)
     if verbose:
         print(f"Top {num} named entities:")
         print(most)
     return most
 
-num_nes = 500
+num_nes = 300
+
+cleaned = preprocess(data['text'])
+tweets = [' '.join(item) for item in cleaned]
 
 # load NEs if available
 if os.path.isfile('vars/{}_tweets_top_{}_nes.pkl'.format(per_file,num_nes)):
     most = pickle.load(open('vars/{}_tweets_top_{}_nes.pkl'.format(per_file,num_nes), "rb"))
 else:
-    most = get_top_NEs(data,num=num_nes)
+    most = get_top_NEs(tweets,num=num_nes)
+
     pickle.dump(most, open('vars/{}_tweets_top_{}_nes.pkl'.format(per_file,num_nes), "wb"))
 
 groupings = [item[0] for item in most]
@@ -149,73 +186,33 @@ Note: If tweet does not belong to any grouping (has label -1) it is excluded. No
 Choose number of most common NEs in order to minimize outliers that are groupless.
 '''
 
-stopwords_set = set(stopwords.words('english'))
-
-def preprocess(strings):
-    clean_text = []
-    for text in strings:
-        tokens = word_tokenize(text)
-        tokens = map(lambda s: s.lower(), tokens)
-        tokens = filter(lambda tok: tok.isalnum() and (tok != 'https') and ('//t' not in tok) and ('covid' not in tok) and ('corona' not in tok) and (len(tok) > 2), tokens)
-        clean_text.append(list(tokens))
-    return clean_text
-
-def preprocessString(strings):
-    word_string = ' '.join(strings)
-    tokens = word_tokenize(word_string)
-    tokens = map(lambda s: s.lower(), tokens)
-    tokens = filter(lambda tok: tok.isalnum() and (tok != 'https') and ('//t' not in tok) and ('covid' not in tok) and ('corona' not in tok) and (len(tok) > 2), tokens)
-    clean_text = list(tokens)
-    return clean_text
-
-clean_text2 = preprocessString(data['text'])
-num_best_collocations = 500
+clean_text = []
+list(map(clean_text.extend, cleaned))
+cleaned = None
+num_best_collocations = 1000
 
 if os.path.isfile('vars/{}_tweets_{}_collocations.pkl'.format(per_file,num_best_collocations)):
     bigrams = pickle.load(open('vars/{}_tweets_{}_collocations.pkl'.format(per_file,num_best_collocations), "rb"))
 else:
-    bigram_collocation = BigramCollocationFinder.from_words(clean_text2)
+    bigram_collocation = BigramCollocationFinder.from_words(clean_text)
     bigrams = bigram_collocation.nbest(BigramAssocMeasures.likelihood_ratio, num_best_collocations)
     pickle.dump(bigrams, open('vars/{}_tweets_{}_collocations.pkl'.format(per_file,num_best_collocations), "wb"))
 
-for first, second in bigrams:
-  groupings.append(' '.join((first, second)))
+print(f"{num_best_collocations} best bigrams:")
+print(bigrams)
 
-labels = groupTweets(groupings, data['text'])
-data['group'] = labels
+for bigram in bigrams:
+  groupings.append(' '.join(bigram))
 
-# load strings if available
-if os.path.isfile('vars/{}_headtweets_{}_ne_strings.pkl'.format(per_file,num_nes)):
-    strings = pickle.load(open('vars/{}_headtweets_{}_ne_strings.pkl'.format(per_file,num_nes), "rb"))
-else:
-    result = []
-    strings = [list() for k in range(len(groupings))]
-    for index, row in data.iterrows():
-        group = row['group']
-        text = row['text']
-        if group != -1:
-            strings[group].append(text)
-    for string in strings:
-        result.append(' '.join(string))
-    strings = result
-    pickle.dump(strings, open('vars/{}_headtweets_{}_ne_strings.pkl'.format(per_file,num_nes), "wb"))
-
-
+# eliminate duplicates
+groupings = list(set(groupings))
+clean_text = None
+documents = buildDocuments(groupings, tweets)
+strings = [' '.join(doc) for doc in documents]
 """### LDA on documents of grouped tweets"""
 
 word_string = ""
-
-
-def preprocess(strings):
-    clean_text = []
-    for text in strings:
-        tokens = word_tokenize(text)
-        tokens = map(lambda s: s.lower(), tokens)
-        tokens = filter(lambda tok: tok.isalnum() and (tok != 'https') and ('//t' not in tok) and ('covid' not in tok) and ('corona' not in tok) and (len(tok) > 2), tokens)
-        clean_text.append(list(tokens))
-    return clean_text
-
-clean_text = preprocess(strings)
+clean_text = lemmatize(strings)
 dictionary_LDA = corpora.Dictionary(clean_text)
 dictionary_LDA.filter_extremes(no_below=3)
 corpus = [dictionary_LDA.doc2bow(list_of_tokens) for list_of_tokens in clean_text]
@@ -223,8 +220,8 @@ corpus = [item for item in corpus if item != []]
 num_topics = 8
 lda_model = models.LdaModel(corpus, num_topics=num_topics, \
                                   id2word=dictionary_LDA, \
-                                  passes=4, alpha=[0.01]*num_topics, \
-                                  eta=[0.01]*len(dictionary_LDA.keys()))
+                                  passes=4, alpha=[.01]*num_topics, \
+                                  eta=[.01]*len(dictionary_LDA.keys()))
 
 for i,topic in lda_model.show_topics(formatted=True, num_topics=num_topics, num_words=15):
     print(str(i)+": "+ topic)
