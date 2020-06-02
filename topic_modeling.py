@@ -34,16 +34,25 @@ nltk.download('averaged_perceptron_tagger')
 nltk.download('wordnet')
 nltk.download('universal_tagset')
 
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--seed', default=0, help='Seed')
+parser.add_argument('--per_file', default=100000, help='Number of tweets per file')
+
+args = parser.parse_args()
+
+
 '''
 https://towardsdatascience.com/topic-modeling-of-2019-hr-tech-conference-twitter-d16cf75895b6
 Data import
 '''
 
-np.random.seed(1)
+np.random.seed(int(args.seed))
 
 datafiles = ['data/2020-' + date for date in ['03-29', '03-30', '03-31', '04-01', '04-02', '04-03', '04-04', '04-05', '04-06', '04-07', '04-08', '04-09', '04-10', '04-11', '04-12', '04-13', '04-14', '04-15', '04-16']]
 
-per_file = 100000
+per_file = int(args.per_file)
 covid_data = pd.read_csv(datafiles[0]).sample(n=per_file)
 for file in datafiles[1:]:
     next_file = pd.read_csv(file)
@@ -172,12 +181,12 @@ cleaned = preprocess(data['text'])
 tweets = [' '.join(item) for item in cleaned]
 
 # load NEs if available
-if os.path.isfile('vars/{}_tweets_top_{}_nes.pkl'.format(per_file,num_nes)):
-    most = pickle.load(open('vars/{}_tweets_top_{}_nes.pkl'.format(per_file,num_nes), "rb"))
+if os.path.isfile('vars/{}_seed_{}_tweets_top_{}_nes.pkl'.format(args.seed, per_file,num_nes)):
+    most = pickle.load(open('vars/{}_seed_{}_tweets_top_{}_nes.pkl'.format(args.seed, per_file,num_nes), "rb"))
 else:
     most = get_top_NEs(tweets,num=num_nes)
 
-    pickle.dump(most, open('vars/{}_tweets_top_{}_nes.pkl'.format(per_file,num_nes), "wb"))
+    pickle.dump(most, open('vars/{}_seed_{}_tweets_top_{}_nes.pkl'.format(args.seed, per_file,num_nes), "wb"))
 
 groupings = [item[0] for item in most]
 
@@ -192,12 +201,12 @@ list(map(clean_text.extend, cleaned))
 cleaned = None
 num_best_collocations = 1000
 
-if os.path.isfile('vars/{}_tweets_{}_collocations.pkl'.format(per_file,num_best_collocations)):
-    bigrams = pickle.load(open('vars/{}_tweets_{}_collocations.pkl'.format(per_file,num_best_collocations), "rb"))
+if os.path.isfile('vars/{}_seed_{}_tweets_{}_collocations.pkl'.format(args.seed, per_file,num_best_collocations)):
+    bigrams = pickle.load(open('vars/{}_seed_{}_tweets_{}_collocations.pkl'.format(args.seed, per_file,num_best_collocations), "rb"))
 else:
     bigram_collocation = BigramCollocationFinder.from_words(clean_text)
     bigrams = bigram_collocation.nbest(BigramAssocMeasures.likelihood_ratio, num_best_collocations)
-    pickle.dump(bigrams, open('vars/{}_tweets_{}_collocations.pkl'.format(per_file,num_best_collocations), "wb"))
+    pickle.dump(bigrams, open('vars/{}_seed_{}_tweets_{}_collocations.pkl'.format(args.seed, per_file,num_best_collocations), "wb"))
 
 print(f"{num_best_collocations} best bigrams:")
 print(bigrams)
@@ -251,14 +260,11 @@ dates = []
 sentiment = []
 
 sen = SentimentIntensityAnalyzer()
-printct = 0
 for index, row in data.iterrows():
     tweets.append(row['text'])
     dates.append(int(row.created_at.dayofyear))
     sentiment.append(sen.polarity_scores(row['text'])['compound'])
-    if printct < 20 and '&amp' in tweets[-1]:
-        print(tweets[-1])
-        printct += 1
+
 
 print("Test tweet " + str(tweets[0]))
 toks = preprocess(tweets)
@@ -280,8 +286,8 @@ for i,tokset in enumerate(toks):
         sentiment_dict[dates[i]] -= 1
 
 
-pickle.dump(topicmap, open('vars/{}_tweets_top_{}_topicmap.pkl'.format(per_file,num_nes), "wb"))
-pickle.dump(sentiment_map, open('vars/{}_tweets_top_{}_sentmap.pkl'.format(per_file, num_nes), "wb"))
+pickle.dump(topicmap, open('vars/{}_seed_{}_tweets_top_{}_topicmap.pkl'.format(args.seed,per_file,num_nes), "wb"))
+pickle.dump(sentiment_map, open('vars/{}_seed_{}_tweets_top_{}_sentmap.pkl'.format(args.seed, per_file, num_nes), "wb"))
 
 # Collect topic and sentiment predictions
 for i,topic in enumerate(topicmap):
@@ -299,8 +305,8 @@ for i,topic in enumerate(topicmap):
     print([round(sent,2) for sent in sents])
 
 
-pickle.dump(counts, open('vars/{}_tweets_top_{}_counts.pkl'.format(per_file,num_nes), "wb"))
-pickle.dump(sents, open('vars/{}_tweets_top_{}_sents.pkl'.format(per_file,num_nes), "wb"))
+pickle.dump(counts, open('vars/{}_seed_{}_tweets_top_{}_counts.pkl'.format(args.seed, per_file,num_nes), "wb"))
+pickle.dump(sents, open('vars/{}_seed_{}_tweets_top_{}_sents.pkl'.format(args.seed, per_file,num_nes), "wb"))
 
 """Generate word cloud for each topic"""
 
@@ -319,6 +325,6 @@ def show_wordcloud(word_string, filepath):
 
 for key in topicstrings.keys():
     print(f"Building wordcloud for topic {key}.")
-    show_wordcloud(' '.join(topicstrings[key]), 'topic_{}_wordcloud.png'.format(key))
+    show_wordcloud(' '.join(topicstrings[key]), '{}_seed_{}_topic_{}_wordcloud.png'.format(args.seed, per_file, key))
 
-pickle.dump(topicstrings, open('vars/{}_tweets_top_{}_topicstrings.pkl'.format(per_file,num_nes), "wb"))
+pickle.dump(topicstrings, open('vars/{}_seed_{}_tweets_top_{}_topicstrings.pkl'.format(args.seed, per_file,num_nes), "wb"))
