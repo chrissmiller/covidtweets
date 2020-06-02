@@ -62,7 +62,8 @@ covid_data_en["dayofyear"] = covid_data_en.created_at.map(lambda x: x.dayofyear)
 
 # Shuffle data
 data = covid_data_en.sample(frac=1)
-
+covid_data_en = None
+covid_data = None
 '''
 SpaCy Named Entity recognition
 
@@ -77,7 +78,7 @@ In english the word breakdown of text is:
 '''
 nlp = spacy.load('en_core_web_sm')
 stopwords_set = set(stopwords.words('english'))
-
+stopwords_set.add('amp') # ampersand error on this dataset
 
 def getNE(tweets, maxnum = 4000):
     '''
@@ -227,6 +228,8 @@ for i,topic in lda_model.show_topics(formatted=True, num_topics=num_topics, num_
     print(str(i)+": "+ topic)
     print()
 
+strings = None
+clean_text = None
 """
 Assign topic to each document
 """
@@ -248,17 +251,21 @@ dates = []
 sentiment = []
 
 sen = SentimentIntensityAnalyzer()
+printct = 0
 for index, row in data.iterrows():
     tweets.append(row['text'])
     dates.append(int(row.created_at.dayofyear))
     sentiment.append(sen.polarity_scores(row['text'])['compound'])
-
+    if printct < 20 and '&amp' in tweets[-1]:
+        print(tweets[-1])
+        printct += 1
 
 print("Test tweet " + str(tweets[0]))
 toks = preprocess(tweets)
 
 topicmap = [collections.defaultdict(int) for i in range(num_topics)]
 sentiment_map = [collections.defaultdict(int) for i in range(num_topics)]
+topicstrings = collections.defaultdict(list)
 
 # Predict topic and sentiment
 for i,tokset in enumerate(toks):
@@ -266,6 +273,7 @@ for i,tokset in enumerate(toks):
     cdict = topicmap[pred[0][0]]
     sentiment_dict = sentiment_map[pred[0][0]]
     cdict[dates[i]] += 1
+    topicstrings[pred[0][0]].append(' '.join(tokset))
     if sentiment[i] >= .05:
         sentiment_dict[dates[i]] += 1
     elif sentiment[i] <= -.05:
@@ -296,22 +304,21 @@ pickle.dump(sents, open('vars/{}_tweets_top_{}_sents.pkl'.format(per_file,num_ne
 
 """Generate word cloud for each topic"""
 
-'''
+
 from wordcloud import WordCloud as wc
 import matplotlib.pyplot as plt
 
-def show_wordcloud(word_string):
-  # Create and generate a word cloud image:
-  wordcloud = wc().generate(word_string)
+def show_wordcloud(word_string, filepath):
+    # Create and generate a word cloud image:
+    wordcloud = wc().generate(word_string)
 
-  # Display the generated image:
-  plt.imshow(wordcloud, interpolation='bilinear')
-  plt.axis("off")
-  plt.show()
+    # Display the generated image:
+    plt.imshow(wordcloud, interpolation='bilinear')
+    plt.axis("off")
+    plt.savefig(filepath)
 
-cur_topic = 1
-topic_string = ""
-#for k in range(0,100):
-#  if topic_assignements[k] == cur_topic:
-#    for
-'''
+for key in topicstrings.keys():
+    print(f"Building wordcloud for topic {key}.")
+    show_wordcloud(' '.join(topicstrings[key]), 'topic_{}_wordcloud.png'.format(key))
+
+pickle.dump(topicstrings, open('vars/{}_tweets_top_{}_topicstrings.pkl'.format(per_file,num_nes), "wb"))
